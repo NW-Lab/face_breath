@@ -24,16 +24,18 @@
  *
  * Breathing depth (Fei & Pavlidis 2010):
  *   Peak-to-peak amplitude of filtered respiratory waveform.
+ *
+ * Key fixes (v1.1):
+ *   - phase managed via useRef to prevent useEffect restart on phase change
+ *   - sampleROI reads from displayCanvas (already drawn, no CORS issues on Safari)
+ *   - Face guide oval drawn directly on canvas during calibration
+ *   - FaceMesh optional: sampling starts immediately without waiting
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BreathingProcessor, type BreathingResult } from "@/lib/breathing";
 
 // ── MediaPipe FaceMesh landmark indices ──────────────────────────────────────
-// Nose tip: 1, Left nostril base: 2, Right nostril base: 326
-// Upper lip center: 13, Lower lip center: 14
-// Left nose wing: 64, Right nose wing: 294
-// Nose bridge: 6, Philtrum: 164
 const NOSE_LANDMARKS = [1, 2, 4, 5, 6, 19, 20, 94, 97, 98, 99, 102, 129, 131, 168, 195, 197, 326, 327, 358];
 const MOUTH_LANDMARKS = [0, 13, 14, 17, 37, 39, 40, 61, 84, 87, 88, 91, 178, 181, 267, 269, 270, 291, 308, 311, 312, 314, 317, 402, 405];
 const UPPER_LIP = 13;
@@ -47,8 +49,8 @@ interface ModeSpec {
   label: string;
   caption: string;
   ampScale: number;
-  inhaleRgb: [number, number, number];  // inhale phase color
-  exhaleRgb: [number, number, number];  // exhale phase color
+  inhaleRgb: [number, number, number];
+  exhaleRgb: [number, number, number];
 }
 
 const MODES: ModeSpec[] = [
@@ -57,24 +59,24 @@ const MODES: ModeSpec[] = [
     label: "SUBTLE",
     caption: "控えめモード — 鼻孔・口周辺のみ柔らかく増幅",
     ampScale: 1.0,
-    inhaleRgb: [61, 250, 255],   // cyan
-    exhaleRgb: [255, 200, 50],   // amber
+    inhaleRgb: [61, 250, 255],
+    exhaleRgb: [255, 200, 50],
   },
   {
     id: "vivid",
     label: "VIVID",
     caption: "派手モード — 顔全体と胸部が呼吸と同期して脈動",
     ampScale: 3.0,
-    inhaleRgb: [40, 220, 200],   // teal
-    exhaleRgb: [255, 160, 30],   // warm amber
+    inhaleRgb: [40, 220, 200],
+    exhaleRgb: [255, 160, 30],
   },
   {
     id: "extreme",
     label: "EXTREME",
     caption: "超派手モード — ピクセル単位で呼吸変化を増幅",
     ampScale: 6.0,
-    inhaleRgb: [0, 255, 200],    // bright teal
-    exhaleRgb: [255, 120, 0],    // deep orange
+    inhaleRgb: [0, 255, 200],
+    exhaleRgb: [255, 120, 0],
   },
 ];
 
@@ -83,6 +85,7 @@ const WAVEFORM_POINTS = 200;
 const TARGET_FPS = 30;
 const FX_W = 240;
 const FX_H = 180;
+const CALIBRATION_SAMPLES = 180; // ~6 seconds at 30fps
 
 type Phase = "idle" | "calibrating" | "measuring" | "error";
 
@@ -102,7 +105,6 @@ export default function BreathingVisualizer() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const waveCanvasRef = useRef<HTMLCanvasElement>(null);
-  const sampleCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const fxCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const processorRef = useRef(new BreathingProcessor(20));
   const rafRef = useRef<number>(0);
@@ -113,7 +115,14 @@ export default function BreathingVisualizer() {
   const faceMeshRef = useRef<unknown>(null);
   const landmarksRef = useRef<Array<{ x: number; y: number; z: number }> | null>(null);
 
-  const [phase, setPhase] = useState<Phase>("idle");
+  // Use ref for phase to avoid useEffect restart on phase change
+  const phaseRef = useRef<Phase>("idle");
+  const [phase, setPhaseState] = useState<Phase>("idle");
+  const setPhase = useCallback((p: Phase) => {
+    phaseRef.current = p;
+    setPhaseState(p);
+  }, []);
+
   const [result, setResult] = useState<BreathingResult | null>(null);
   const [sampleCount, setSampleCount] = useState(0);
   const [vignetteActive, setVignetteActive] = useState(false);
@@ -121,21 +130,15 @@ export default function BreathingVisualizer() {
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [ampLevel, setAmpLevel] = useState(5);
   const [modeId, setModeId] = useState<ModeId>("vivid");
-  const [faceMeshReady, setFaceMeshReady] = useState(false);
 
   const mode = useMemo(() => MODES.find((m) => m.id === modeId) ?? MODES[1], [modeId]);
 
-  // ── Load MediaPipe FaceMesh ──────────────────────────────────────────────
+  // ── Load MediaPipe FaceMesh (optional, non-blocking) ────────────────────
   useEffect(() => {
-    const script1 = document.createElement("script");
-    script1.src = "https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js";
-    script1.crossOrigin = "anonymous";
-    document.head.appendChild(script1);
-
-    const script2 = document.createElement("script");
-    script2.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
-    script2.crossOrigin = "anonymous";
-    script2.onload = () => {
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js";
+    script.crossOrigin = "anonymous";
+    script.onload = () => {
       try {
         // @ts-expect-error MediaPipe global
         const fm = new window.FaceMesh({
@@ -156,17 +159,13 @@ export default function BreathingVisualizer() {
           }
         });
         faceMeshRef.current = fm;
-        setFaceMeshReady(true);
       } catch {
-        // FaceMesh unavailable — fall back to ROI-only mode
-        setFaceMeshReady(true);
+        // FaceMesh unavailable — fall back to fixed ROI mode
       }
     };
-    document.head.appendChild(script2);
-
+    document.head.appendChild(script);
     return () => {
-      document.head.removeChild(script1);
-      document.head.removeChild(script2);
+      if (document.head.contains(script)) document.head.removeChild(script);
     };
   }, []);
 
@@ -175,6 +174,11 @@ export default function BreathingVisualizer() {
     setPhase("calibrating");
     setErrorMsg("");
     processorRef.current.reset();
+    setSampleCount(0);
+    setResult(null);
+    setWaveformData([]);
+    smoothBreathRef.current = 0;
+    landmarksRef.current = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
@@ -193,7 +197,7 @@ export default function BreathingVisualizer() {
       setErrorMsg(`カメラを起動できませんでした: ${msg}`);
       setPhase("error");
     }
-  }, []);
+  }, [setPhase]);
 
   // ── camera stop ─────────────────────────────────────────────────────────
   const stopCamera = useCallback(() => {
@@ -210,13 +214,15 @@ export default function BreathingVisualizer() {
     setWaveformData([]);
     smoothBreathRef.current = 0;
     landmarksRef.current = null;
-  }, []);
+  }, [setPhase]);
 
-  // ── helper: sample ROI from canvas ──────────────────────────────────────
+  // ── helper: sample ROI from displayCanvas ──────────────────────────────
+  // Reads from the already-drawn displayCanvas to avoid CORS issues on Safari
   const sampleROI = useCallback(
     (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {
       const cw = ctx.canvas.width;
       const ch = ctx.canvas.height;
+      if (!cw || !ch) return null;
       const rx = Math.max(0, Math.floor(x * cw));
       const ry = Math.max(0, Math.floor(y * ch));
       const rw = Math.max(1, Math.min(Math.floor(w * cw), cw - rx));
@@ -236,15 +242,15 @@ export default function BreathingVisualizer() {
     []
   );
 
-  // ── EVM amplification: draw breath-amplified overlay ────────────────────
+  // ── EVM amplification overlay ────────────────────────────────────────────
   const drawBreathAmplification = useCallback(
     (
       displayCtx: CanvasRenderingContext2D,
-      breathVal: number, // -1..1
+      breathVal: number,
       dw: number,
       dh: number,
       vw: number,
-      vh: number,
+      _vh: number,
     ) => {
       const amp = (ampLevel / 5) * mode.ampScale;
       const intensity = Math.abs(breathVal) * amp * 0.15;
@@ -252,7 +258,6 @@ export default function BreathingVisualizer() {
       const [tr, tg, tb] = isInhale ? mode.inhaleRgb : mode.exhaleRgb;
 
       if (modeId === "subtle") {
-        // Soft glow around nose/mouth area
         const cx = dw / 2;
         const cy = dh * 0.55;
         const grad = displayCtx.createRadialGradient(cx, cy, 0, cx, cy, dw * 0.35);
@@ -264,73 +269,74 @@ export default function BreathingVisualizer() {
         displayCtx.globalCompositeOperation = "source-over";
 
       } else if (modeId === "vivid") {
-        // Full face + chest area pulsing
-        const cx = dw / 2;
-        const cy = dh * 0.45;
-        const grad = displayCtx.createRadialGradient(cx, cy, 0, cx, cy, dw * 0.65);
-        grad.addColorStop(0, `rgba(${tr},${tg},${tb},${intensity * 0.6})`);
-        grad.addColorStop(0.6, `rgba(${tr},${tg},${tb},${intensity * 0.25})`);
-        grad.addColorStop(1, `rgba(${tr},${tg},${tb},0)`);
+        // Face glow
+        const faceGrad = displayCtx.createRadialGradient(dw / 2, dh * 0.38, 0, dw / 2, dh * 0.38, dw * 0.5);
+        faceGrad.addColorStop(0, `rgba(${tr},${tg},${tb},${intensity * 0.45})`);
+        faceGrad.addColorStop(0.6, `rgba(${tr},${tg},${tb},${intensity * 0.15})`);
+        faceGrad.addColorStop(1, `rgba(${tr},${tg},${tb},0)`);
         displayCtx.globalCompositeOperation = "screen";
-        displayCtx.fillStyle = grad;
+        displayCtx.fillStyle = faceGrad;
         displayCtx.fillRect(0, 0, dw, dh);
+        displayCtx.globalCompositeOperation = "source-over";
 
-        // Chest area (lower portion)
-        const chestGrad = displayCtx.createRadialGradient(cx, dh * 0.82, 0, cx, dh * 0.82, dw * 0.4);
-        chestGrad.addColorStop(0, `rgba(${tr},${tg},${tb},${intensity * 0.4})`);
+        // Chest glow
+        displayCtx.globalCompositeOperation = "soft-light";
+        const chestGrad = displayCtx.createLinearGradient(0, dh * 0.6, 0, dh);
+        chestGrad.addColorStop(0, `rgba(${tr},${tg},${tb},${intensity * 0.6})`);
         chestGrad.addColorStop(1, `rgba(${tr},${tg},${tb},0)`);
         displayCtx.fillStyle = chestGrad;
         displayCtx.fillRect(0, dh * 0.6, dw, dh * 0.4);
         displayCtx.globalCompositeOperation = "source-over";
 
-        // Screen wash
         displayCtx.globalCompositeOperation = "soft-light";
         displayCtx.fillStyle = `rgba(${tr},${tg},${tb},${intensity * 0.12})`;
         displayCtx.fillRect(0, 0, dw, dh);
         displayCtx.globalCompositeOperation = "source-over";
 
       } else if (modeId === "extreme") {
-        // Per-pixel luminance shift using offscreen FX canvas
         if (!fxCanvasRef.current) {
           const c = document.createElement("canvas");
           c.width = FX_W; c.height = FX_H;
           fxCanvasRef.current = c;
         }
         const fxCtx = fxCanvasRef.current.getContext("2d")!;
-        fxCtx.drawImage(videoRef.current!, 0, 0, FX_W, FX_H);
-        const imgData = fxCtx.getImageData(0, 0, FX_W, FX_H);
-        const d = imgData.data;
-        const mixStrength = Math.min(0.85, intensity * 1.5);
+        const video = videoRef.current;
+        if (video && video.readyState >= 2) {
+          fxCtx.save();
+          fxCtx.scale(-1, 1);
+          fxCtx.drawImage(video, -FX_W, 0, FX_W, FX_H);
+          fxCtx.restore();
+          const imgData = fxCtx.getImageData(0, 0, FX_W, FX_H);
+          const d = imgData.data;
+          const mixStrength = Math.min(0.85, intensity * 1.5);
 
-        for (let i = 0; i < d.length; i += 4) {
-          const r = d[i], g = d[i + 1], b = d[i + 2];
-          // Skin-tone heuristic: R > G > B and reasonable brightness
-          const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-          if (r > g && g > b && lum > 40 && lum < 220 && r / (g + 1) > 1.05) {
-            d[i]     = Math.round(r + (tr - r) * mixStrength);
-            d[i + 1] = Math.round(g + (tg - g) * mixStrength);
-            d[i + 2] = Math.round(b + (tb - b) * mixStrength);
+          for (let i = 0; i < d.length; i += 4) {
+            const r = d[i], g = d[i + 1], b = d[i + 2];
+            const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+            if (r > g && g > b && lum > 40 && lum < 220 && r / (g + 1) > 1.05) {
+              d[i]     = Math.round(r + (tr - r) * mixStrength);
+              d[i + 1] = Math.round(g + (tg - g) * mixStrength);
+              d[i + 2] = Math.round(b + (tb - b) * mixStrength);
+            }
           }
+          fxCtx.putImageData(imgData, 0, 0);
+
+          displayCtx.globalCompositeOperation = "lighter";
+          displayCtx.globalAlpha = intensity * 0.7;
+          displayCtx.drawImage(fxCanvasRef.current, 0, 0, dw, dh);
+          displayCtx.globalAlpha = 1;
+          displayCtx.globalCompositeOperation = "source-over";
         }
-        fxCtx.putImageData(imgData, 0, 0);
 
-        displayCtx.globalCompositeOperation = "lighter";
-        displayCtx.globalAlpha = intensity * 0.7;
-        displayCtx.drawImage(fxCanvasRef.current, 0, 0, dw, dh);
-        displayCtx.globalAlpha = 1;
-        displayCtx.globalCompositeOperation = "source-over";
-
-        // Full screen tint
         displayCtx.globalCompositeOperation = "screen";
         displayCtx.fillStyle = `rgba(${tr},${tg},${tb},${intensity * 0.18})`;
         displayCtx.fillRect(0, 0, dw, dh);
         displayCtx.globalCompositeOperation = "source-over";
       }
 
-      // ── Landmark overlays ──────────────────────────────────────────────
+      // ── Landmark overlays ──────────────────────────────────────────────────
       const lm = landmarksRef.current;
       if (lm && lm.length > 400) {
-        // Draw nose ROI highlight
         const nosePts = NOSE_LANDMARKS.map(i => lm[i]).filter(Boolean);
         if (nosePts.length > 0) {
           const noseColor = isInhale
@@ -338,7 +344,7 @@ export default function BreathingVisualizer() {
             : `rgba(255,200,50,${0.1 + intensity * 0.3})`;
           displayCtx.beginPath();
           nosePts.forEach((p, idx) => {
-            const px = (1 - p.x) * dw; // mirror
+            const px = (1 - p.x) * dw;
             const py = p.y * dh;
             if (idx === 0) displayCtx.moveTo(px, py);
             else displayCtx.lineTo(px, py);
@@ -351,7 +357,6 @@ export default function BreathingVisualizer() {
           displayCtx.stroke();
         }
 
-        // Draw mouth ROI highlight
         const mouthPts = MOUTH_LANDMARKS.map(i => lm[i]).filter(Boolean);
         if (mouthPts.length > 0) {
           const mouthColor = `rgba(255,160,30,${0.08 + intensity * 0.3})`;
@@ -371,6 +376,84 @@ export default function BreathingVisualizer() {
     [ampLevel, mode, modeId]
   );
 
+  // ── draw face guide oval ─────────────────────────────────────────────────
+  const drawFaceGuide = useCallback(
+    (ctx: CanvasRenderingContext2D, dw: number, dh: number, progress: number) => {
+      const cx = dw / 2;
+      const cy = dh * 0.40;
+      const rx = dw * 0.22;
+      const ry = dh * 0.33;
+
+      // Animated pulse based on progress
+      const pulse = 1 + Math.sin(Date.now() / 600) * 0.015;
+      const prx = rx * pulse;
+      const pry = ry * pulse;
+
+      // Color transitions from dim white → cyan as calibration progresses
+      const alpha = 0.4 + progress * 0.5;
+      const r = Math.round(61 + (255 - 61) * (1 - progress));
+      const g = Math.round(250);
+      const b = Math.round(255);
+
+      // Outer glow
+      ctx.save();
+      ctx.shadowColor = `rgba(61,250,255,${0.3 + progress * 0.5})`;
+      ctx.shadowBlur = 16 + progress * 20;
+
+      // Dashed oval
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, prx, pry, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(${r},${g},${b},${alpha})`;
+      ctx.lineWidth = 2.5;
+      ctx.setLineDash([12, 8]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Corner tick marks (4 corners of the oval)
+      const tickLen = 16;
+      const corners = [
+        { angle: -Math.PI / 2 },  // top
+        { angle: 0 },              // right
+        { angle: Math.PI / 2 },    // bottom
+        { angle: Math.PI },        // left
+      ];
+      corners.forEach(({ angle }) => {
+        const ex = cx + prx * Math.cos(angle);
+        const ey = cy + pry * Math.sin(angle);
+        const nx = Math.cos(angle);
+        const ny = Math.sin(angle);
+        ctx.beginPath();
+        ctx.moveTo(ex - nx * tickLen * 0.5, ey - ny * tickLen * 0.5);
+        ctx.lineTo(ex + nx * tickLen * 0.5, ey + ny * tickLen * 0.5);
+        ctx.strokeStyle = `rgba(61,250,255,${0.7 + progress * 0.3})`;
+        ctx.lineWidth = 3;
+        ctx.setLineDash([]);
+        ctx.stroke();
+      });
+
+      ctx.restore();
+
+      // Center crosshair (small)
+      ctx.save();
+      ctx.strokeStyle = `rgba(61,250,255,${0.3 + progress * 0.3})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx - 10, cy); ctx.lineTo(cx + 10, cy);
+      ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy + 10);
+      ctx.stroke();
+      ctx.restore();
+
+      // Label
+      ctx.save();
+      ctx.font = `bold 11px "JetBrains Mono", monospace`;
+      ctx.fillStyle = `rgba(61,250,255,${0.6 + progress * 0.4})`;
+      ctx.textAlign = "center";
+      ctx.fillText("FACE ALIGN", cx, cy - pry - 12);
+      ctx.restore();
+    },
+    []
+  );
+
   // ── draw waveform ────────────────────────────────────────────────────────
   const drawWaveform = useCallback(
     (waveData: number[], breathVal: number) => {
@@ -388,7 +471,6 @@ export default function BreathingVisualizer() {
       const waveColor = isInhale ? "#3dfaff" : "#ffc832";
       const glowColor = isInhale ? "rgba(61,250,255,0.4)" : "rgba(255,200,50,0.4)";
 
-      // Grid lines
       ctx.strokeStyle = "rgba(255,255,255,0.06)";
       ctx.lineWidth = 1;
       for (let i = 1; i < 4; i++) {
@@ -396,14 +478,12 @@ export default function BreathingVisualizer() {
         ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
       }
 
-      // Zero line
       ctx.strokeStyle = "rgba(255,255,255,0.15)";
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 4]);
       ctx.beginPath(); ctx.moveTo(0, h / 2); ctx.lineTo(w, h / 2); ctx.stroke();
       ctx.setLineDash([]);
 
-      // Waveform glow
       ctx.shadowColor = glowColor;
       ctx.shadowBlur = 8;
       ctx.strokeStyle = waveColor;
@@ -422,34 +502,33 @@ export default function BreathingVisualizer() {
   );
 
   // ── main render loop ─────────────────────────────────────────────────────
+  // NOTE: phase is intentionally NOT in the dependency array.
+  // We read phaseRef.current inside the loop to avoid restarting the RAF loop
+  // every time phase changes (which would reset frameCount and break calibration).
   useEffect(() => {
     const video = videoRef.current;
     const displayCanvas = displayCanvasRef.current;
     const waveCanvas = waveCanvasRef.current;
     if (!video || !displayCanvas || !waveCanvas) return;
-    if (phase === "idle" || phase === "error") {
-      cancelAnimationFrame(rafRef.current);
-      return;
-    }
 
     let frameCount = 0;
+    let running = true;
 
     const loop = (now: number) => {
+      if (!running) return;
       rafRef.current = requestAnimationFrame(loop);
+
+      const currentPhase = phaseRef.current;
+      if (currentPhase === "idle" || currentPhase === "error") return;
+
       if (now - lastFrameRef.current < 1000 / TARGET_FPS) return;
       lastFrameRef.current = now;
+
       if (video.readyState < 2) return;
 
       const vw = video.videoWidth;
       const vh = video.videoHeight;
       if (!vw || !vh) return;
-
-      // Ensure sample canvas
-      if (!sampleCanvasRef.current || sampleCanvasRef.current.width !== vw) {
-        const c = document.createElement("canvas");
-        c.width = vw; c.height = vh;
-        sampleCanvasRef.current = c;
-      }
 
       // Sync display canvas size to CSS rendered size
       const rect = displayCanvas.getBoundingClientRect();
@@ -460,22 +539,18 @@ export default function BreathingVisualizer() {
         displayCanvas.height = targetH;
       }
 
-      // Always draw video frame to display canvas first (mirrored)
-      const dCtxEarly = displayCanvas.getContext("2d");
-      if (dCtxEarly) {
-        dCtxEarly.save();
-        dCtxEarly.scale(-1, 1);
-        dCtxEarly.drawImage(video, -targetW, 0, targetW, targetH);
-        dCtxEarly.restore();
-      }
+      const dCtx = displayCanvas.getContext("2d", { willReadFrequently: true });
+      if (!dCtx) return;
+      const dw = displayCanvas.width;
+      const dh = displayCanvas.height;
 
-      const sCtx = sampleCanvasRef.current.getContext("2d", { willReadFrequently: true });
-      if (!sCtx) return;
-      sCtx.drawImage(video, 0, 0, vw, vh);
+      // Draw mirrored video frame
+      dCtx.save();
+      dCtx.scale(-1, 1);
+      dCtx.drawImage(video, -dw, 0, dw, dh);
+      dCtx.restore();
 
-      const t = now;
-
-      // ── FaceMesh processing (every 2nd frame for performance) ──
+      // ── FaceMesh processing (every 2nd frame) ──
       if (frameCount % 2 === 0 && faceMeshRef.current) {
         try {
           // @ts-expect-error MediaPipe
@@ -484,41 +559,43 @@ export default function BreathingVisualizer() {
       }
       frameCount++;
 
-      // ── ROI sampling ──────────────────────────────────────────────────
+      const t = now;
+
+      // ── ROI sampling from displayCanvas (already drawn, no CORS issues) ──
       const lm = landmarksRef.current;
 
       // Face ROI: center 55% of frame (forehead + cheeks)
-      const faceRoi = sampleROI(sCtx, 0.225, 0.1, 0.55, 0.55);
+      // Note: displayCanvas is mirrored, so x coords are already mirrored
+      const faceRoi = sampleROI(dCtx, 0.225, 0.1, 0.55, 0.55);
       if (faceRoi) processorRef.current.pushFace({ t, ...faceRoi });
 
-      // Nose ROI: from landmarks or fixed position
+      // Nose ROI
       let noseRoi = null;
       if (lm && lm.length > 400) {
         const noseTip = lm[1];
-        const noseBase = lm[2];
         const noseW = 0.12, noseH = 0.1;
-        noseRoi = sampleROI(sCtx,
-          Math.max(0, (1 - noseTip.x) - noseW / 2),
+        // Mirror x: displayCanvas is mirrored, so use noseTip.x directly
+        noseRoi = sampleROI(dCtx,
+          Math.max(0, noseTip.x - noseW / 2),
           Math.max(0, noseTip.y - noseH * 0.3),
           noseW, noseH
         );
       } else {
-        noseRoi = sampleROI(sCtx, 0.4, 0.42, 0.2, 0.12);
+        noseRoi = sampleROI(dCtx, 0.4, 0.42, 0.2, 0.12);
       }
       if (noseRoi) processorRef.current.pushNose({ t, ...noseRoi });
 
-      // Mouth ROI: from landmarks or fixed position
+      // Mouth ROI
       let mouthRoi = null;
       if (lm && lm.length > 400) {
         const upperLip = lm[UPPER_LIP];
         const lowerLip = lm[LOWER_LIP];
         const mouthW = 0.18, mouthH = 0.1;
-        mouthRoi = sampleROI(sCtx,
-          Math.max(0, (1 - upperLip.x) - mouthW / 2),
+        mouthRoi = sampleROI(dCtx,
+          Math.max(0, upperLip.x - mouthW / 2),
           Math.max(0, upperLip.y - 0.01),
           mouthW, mouthH
         );
-        // Landmark sample for mouth openness
         processorRef.current.pushLandmark({
           t,
           upperLipY: upperLip.y,
@@ -528,72 +605,74 @@ export default function BreathingVisualizer() {
           rightNostrilY: lm[326]?.y ?? lm[2].y,
         });
       } else {
-        mouthRoi = sampleROI(sCtx, 0.38, 0.56, 0.24, 0.1);
+        mouthRoi = sampleROI(dCtx, 0.38, 0.56, 0.24, 0.1);
       }
       if (mouthRoi) processorRef.current.pushMouth({ t, ...mouthRoi });
 
-      // Chest ROI: lower 30% of frame
-      const chestRoi = sampleROI(sCtx, 0.2, 0.7, 0.6, 0.25);
+      // Chest ROI
+      const chestRoi = sampleROI(dCtx, 0.2, 0.7, 0.6, 0.25);
       if (chestRoi) processorRef.current.pushChest({ t, ...chestRoi });
 
       const count = processorRef.current.faceCount;
       setSampleCount(count);
 
-      // ── Analyze ──────────────────────────────────────────────────────
-      const CALIBRATION_SAMPLES = 180; // ~6 seconds at 30fps
-      if (count >= CALIBRATION_SAMPLES && phase === "calibrating") {
+      // ── Phase transition ──
+      if (count >= CALIBRATION_SAMPLES && currentPhase === "calibrating") {
         setPhase("measuring");
       }
 
-      let currentResult: BreathingResult | null = null;
-      if (phase === "measuring" || count > CALIBRATION_SAMPLES) {
-        currentResult = processorRef.current.analyze();
-        if (currentResult) {
-          setResult(currentResult);
-
-          // Waveform update
-          const wf = currentResult.waveform.slice(-WAVEFORM_POINTS);
-          setWaveformData(wf);
-
-          // Breath cycle vignette
-          const currentPhase = currentResult.phase;
-          const prevPhase = lastBreathPhaseRef.current;
-          if (prevPhase < 0 && currentPhase >= 0 && Math.abs(currentPhase - prevPhase) > 1) {
-            if (vignetteTimerRef.current) clearTimeout(vignetteTimerRef.current);
-            setVignetteActive(true);
-            vignetteTimerRef.current = setTimeout(() => setVignetteActive(false), 800);
-          }
-          lastBreathPhaseRef.current = currentPhase;
-        }
-      }
-
-      // ── Smooth breath value for animation ────────────────────────────
+      // ── Smooth breath value ──
       const rawBreath = processorRef.current.getInstantaneousValue();
       smoothBreathRef.current += (rawBreath - smoothBreathRef.current) * 0.12;
       const breathVal = smoothBreathRef.current;
 
-      // ── Draw EVM amplification overlay on top of already-drawn video ──
-      const dCtx = displayCanvas.getContext("2d");
-      if (!dCtx) return;
-      const dw = displayCanvas.width;
-      const dh = displayCanvas.height;
-
-      // EVM amplification overlay (video already drawn above)
+      // ── EVM amplification overlay ──
       drawBreathAmplification(dCtx, breathVal, dw, dh, vw, vh);
 
-      // Waveform
+      // ── Face guide oval (during calibration) ──
+      if (currentPhase === "calibrating") {
+        const progress = Math.min(1, count / CALIBRATION_SAMPLES);
+        drawFaceGuide(dCtx, dw, dh, progress);
+      }
+
+      // ── Analyze ──
+      let currentResult: BreathingResult | null = null;
+      if (currentPhase === "measuring" || count > CALIBRATION_SAMPLES) {
+        currentResult = processorRef.current.analyze();
+        if (currentResult) {
+          setResult(currentResult);
+          const wf = currentResult.waveform.slice(-WAVEFORM_POINTS);
+          setWaveformData(wf);
+
+          const cp = currentResult.phase;
+          const pp = lastBreathPhaseRef.current;
+          if (pp < 0 && cp >= 0 && Math.abs(cp - pp) > 1) {
+            if (vignetteTimerRef.current) clearTimeout(vignetteTimerRef.current);
+            setVignetteActive(true);
+            vignetteTimerRef.current = setTimeout(() => setVignetteActive(false), 800);
+          }
+          lastBreathPhaseRef.current = cp;
+        }
+      }
+
+      // ── Waveform ──
       const wf = currentResult?.waveform.slice(-WAVEFORM_POINTS) ?? waveformData;
       drawWaveform(wf, breathVal);
     };
 
     rafRef.current = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(rafRef.current);
-  }, [phase, drawBreathAmplification, drawWaveform, sampleROI, waveformData]);
+    return () => {
+      running = false;
+      cancelAnimationFrame(rafRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawBreathAmplification, drawFaceGuide, drawWaveform, sampleROI]);
+  // NOTE: phase intentionally omitted — use phaseRef.current inside loop
 
   // ── Breathing mode display helpers ──────────────────────────────────────
   const breathingModeLabel = (mode: string) => {
     switch (mode) {
-      case "nasal": return { label: "鼻呼吸", color: "text-emerald-400", glow: "glow-green" };
+      case "nasal": return { label: "鼻呼吸", color: "text-cyan-400", glow: "glow-cyan" };
       case "oral": return { label: "口呼吸", color: "text-amber-400", glow: "glow-amber" };
       case "mixed": return { label: "混合", color: "text-cyan-400", glow: "glow-cyan" };
       default: return { label: "判定中", color: "text-gray-400", glow: "" };
@@ -603,12 +682,12 @@ export default function BreathingVisualizer() {
   const modeInfo = result ? breathingModeLabel(result.breathingMode) : breathingModeLabel("unknown");
 
   // ── Calibration progress ─────────────────────────────────────────────────
-  const calibProgress = Math.min(100, (sampleCount / 180) * 100);
+  const calibProgress = Math.min(100, (sampleCount / CALIBRATION_SAMPLES) * 100);
 
   // ── render ───────────────────────────────────────────────────────────────
   return (
     <div className="relative w-full h-full bg-background overflow-hidden select-none">
-      {/* Hidden video element */}
+      {/* Video element — shown during calibration/measuring */}
       <video
         ref={videoRef}
         className="absolute inset-0 w-full h-full object-cover pointer-events-none"
@@ -618,7 +697,7 @@ export default function BreathingVisualizer() {
         autoPlay
       />
 
-      {/* Display canvas — full screen (overlaid on video, shows EVM amplification + HUD overlays) */}
+      {/* Display canvas — overlaid on video, shows EVM + guide + HUD */}
       <canvas
         ref={displayCanvasRef}
         className={`absolute inset-0 w-full h-full object-cover scanlines ${vignetteActive ? "breath-vignette" : ""}`}
@@ -640,7 +719,6 @@ export default function BreathingVisualizer() {
       {/* ── IDLE STATE ──────────────────────────────────────────────────── */}
       {phase === "idle" && (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-8 px-6">
-          {/* Title */}
           <div className="text-center">
             <div className="hud-label text-primary mb-2">BIO-LAB NOIR</div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground" style={{ fontFamily: "var(--font-sans)" }}>
@@ -651,7 +729,6 @@ export default function BreathingVisualizer() {
             </p>
           </div>
 
-          {/* Feature list */}
           <div className="hud-panel rounded-lg p-4 w-full max-w-sm space-y-2">
             {[
               { icon: "◈", label: "呼吸数 (BPM)", desc: "顔ROI rPPG + FFT解析" },
@@ -662,24 +739,22 @@ export default function BreathingVisualizer() {
               <div key={f.label} className="flex items-center gap-3">
                 <span className="text-primary text-lg w-6 text-center">{f.icon}</span>
                 <div>
-                  <div className="text-xs font-medium text-foreground">{f.label}</div>
+                  <div className="text-sm font-medium text-foreground">{f.label}</div>
                   <div className="text-xs text-muted-foreground">{f.desc}</div>
                 </div>
               </div>
             ))}
           </div>
 
-          {/* Start button */}
           <button
             onClick={startCamera}
-            className="relative px-8 py-4 rounded-lg font-semibold text-primary-foreground overflow-hidden transition-all active:scale-95"
+            className="px-8 py-3 rounded-lg text-base font-bold text-background transition-all active:scale-95"
             style={{
               background: "oklch(0.78 0.16 200)",
-              boxShadow: "0 0 20px rgba(61,250,255,0.4), 0 0 40px rgba(61,250,255,0.2)",
-              fontFamily: "var(--font-sans)",
+              boxShadow: "0 0 24px rgba(61,250,255,0.4)",
             }}
           >
-            <span className="relative z-10 tracking-wider uppercase text-sm font-bold">計測開始</span>
+            計測開始
           </button>
 
           <p className="text-xs text-muted-foreground text-center max-w-xs">
@@ -708,7 +783,7 @@ export default function BreathingVisualizer() {
 
       {/* ── CALIBRATION OVERLAY ─────────────────────────────────────────── */}
       {phase === "calibrating" && (
-        <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 flex flex-col items-center gap-4 px-6">
+        <div className="absolute inset-x-0 bottom-24 flex flex-col items-center gap-4 px-6 pointer-events-none">
           <div className="hud-panel rounded-lg px-6 py-4 text-center">
             <div className="hud-label text-primary mb-2">CALIBRATING</div>
             <p className="text-xs text-muted-foreground mb-3">
@@ -817,7 +892,6 @@ export default function BreathingVisualizer() {
             className="absolute left-0 right-0 flex flex-col gap-3 px-4"
             style={{ bottom: "max(env(safe-area-inset-bottom), 16px)", paddingBottom: 8 }}
           >
-            {/* Mode selector */}
             <div className="flex gap-2 justify-center">
               {MODES.map((m) => (
                 <button
@@ -833,7 +907,6 @@ export default function BreathingVisualizer() {
               ))}
             </div>
 
-            {/* AMP slider + stop */}
             <div className="flex items-center gap-3">
               <div className="hud-panel rounded px-3 py-2 flex-1 flex items-center gap-3">
                 <span className="hud-label text-muted-foreground shrink-0">AMP</span>
@@ -856,13 +929,12 @@ export default function BreathingVisualizer() {
               </button>
             </div>
 
-            {/* Mode caption */}
             <div className="text-center">
               <span className="text-xs text-muted-foreground">{mode.caption}</span>
             </div>
           </div>
 
-          {/* Nose/mouth ROI corner indicators */}
+          {/* Mouth openness indicator */}
           {result && (
             <div className="absolute top-16 right-4">
               <div className="hud-panel rounded px-2 py-1">
