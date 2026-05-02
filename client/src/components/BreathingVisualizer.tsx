@@ -578,37 +578,48 @@ export default function BreathingVisualizer() {
         <canvas ref={waveRef} className="w-full" style={{ height: 80 }} />
       </div>
 
-      {/* FFT Window Slider */}
-      <div className="w-full rounded-xl p-4" style={{ background: "rgba(0,220,255,0.04)", border: "1px solid rgba(0,220,255,0.12)" }}>
-        <div className="flex justify-between items-center mb-3">
-          <span className="text-xs font-mono text-gray-400">FFT ウィンドウ長</span>
-          <span className="text-xs font-mono text-cyan-400">{fftWinDisplay} フレーム ({(fftWinDisplay / TARGET_FPS).toFixed(1)}s)</span>
+      {/* FFT Window Slider — placed prominently before start button */}
+      <div className="w-full rounded-xl px-4 pt-4 pb-3"
+           style={{ background: "rgba(0,220,255,0.07)", border: "2px solid rgba(0,220,255,0.25)" }}>
+
+        {/* Label row */}
+        <div className="flex justify-between items-center mb-1">
+          <span className="text-sm font-bold font-mono" style={{ color: "#00dcff" }}>
+            FFT Window
+          </span>
+          <span className="text-base font-bold font-mono" style={{ color: "#00ffb4" }}>
+            {fftWinDisplay} frames &nbsp;({(fftWinDisplay / TARGET_FPS).toFixed(1)} s)
+          </span>
         </div>
+
+        {/* Native range — iOS Safari safe */}
         <input
           type="range"
           min={FFT_WIN_MIN}
           max={FFT_WIN_MAX}
           step={10}
           defaultValue={FFT_WIN_DEFAULT}
+          className="breath-slider"
           onChange={(e) => {
             const v = Number(e.target.value);
-            fftWinRef.current = v;      // update ref immediately (no re-render)
-            setFftWinDisplay(v);        // update display label
-          }}
-          className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
-          style={{
-            background: `linear-gradient(to right, #00dcff ${((fftWinDisplay - FFT_WIN_MIN) / (FFT_WIN_MAX - FFT_WIN_MIN)) * 100}%, rgba(0,220,255,0.15) 0%)`,
-            accentColor: "#00dcff",
+            fftWinRef.current = v;
+            setFftWinDisplay(v);
           }}
         />
-        <div className="flex justify-between mt-1">
-          <span className="text-xs text-gray-600 font-mono">{FFT_WIN_MIN}f ({(FFT_WIN_MIN/TARGET_FPS).toFixed(0)}s)</span>
-          <span className="text-xs text-gray-600 font-mono">{FFT_WIN_MAX}f ({(FFT_WIN_MAX/TARGET_FPS).toFixed(0)}s)</span>
+
+        {/* Range labels */}
+        <div className="flex justify-between -mt-1">
+          <span className="text-xs text-gray-500 font-mono">{FFT_WIN_MIN}f / {(FFT_WIN_MIN/TARGET_FPS).toFixed(0)}s</span>
+          <span className="text-xs text-gray-500 font-mono">{FFT_WIN_MAX}f / {(FFT_WIN_MAX/TARGET_FPS).toFixed(0)}s</span>
         </div>
-        {/* Live sample count */}
+
+        {/* Live sample counter */}
         <div className="mt-2 flex items-center gap-2">
-          <span className="text-xs text-gray-600 font-mono">現在のサンプル数:</span>
-          <span ref={sampleCountDomRef} className="text-xs font-mono text-cyan-400">-- / {fftWinDisplay}</span>
+          <span className="text-xs text-gray-500 font-mono">サンプル数:</span>
+          <span ref={sampleCountDomRef} className="text-xs font-bold font-mono" style={{ color: "#00dcff" }}>
+            -- / {fftWinDisplay}
+          </span>
+          <span className="text-xs text-gray-600 font-mono ml-auto">不安定なら大きく</span>
         </div>
       </div>
 
