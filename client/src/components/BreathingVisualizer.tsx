@@ -467,9 +467,9 @@ export default function BreathingVisualizer() {
         <p className="text-sm text-gray-400 mt-1">カメラで顔・鼻孔・胸部の動きから呼吸をリアルタイム推定</p>
       </div>
 
-      {/* Camera canvas */}
+      {/* Camera canvas — max 50vh so buttons are visible without scrolling */}
       <div className="relative w-full rounded-xl overflow-hidden border border-cyan-900/40"
-           style={{ aspectRatio: "4/3", background: "#0a0f1a" }}>
+           style={{ aspectRatio: "4/3", maxHeight: "50vh", background: "#0a0f1a" }}>
 
         {/* Hidden video element — feeds canvas */}
         <video
