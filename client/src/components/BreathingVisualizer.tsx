@@ -128,10 +128,28 @@ export default function BreathingVisualizer() {
   const [vignetteActive, setVignetteActive] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [waveformData, setWaveformData] = useState<number[]>([]);
-  const [ampLevel, setAmpLevel] = useState(5);
-  const [modeId, setModeId] = useState<ModeId>("vivid");
+  
+  // Use refs for ampLevel and modeId to avoid useEffect restart
+  const ampLevelRef = useRef(5);
+  const [ampLevel, setAmpLevelState] = useState(5);
+  const setAmpLevel = useCallback((val: number) => {
+    ampLevelRef.current = val;
+    setAmpLevelState(val);
+  }, []);
 
-  const mode = useMemo(() => MODES.find((m) => m.id === modeId) ?? MODES[1], [modeId]);
+  const modeIdRef = useRef<ModeId>("vivid");
+  const [modeId, setModeIdState] = useState<ModeId>("vivid");
+  const setModeId = useCallback((id: ModeId) => {
+    modeIdRef.current = id;
+    setModeIdState(id);
+  }, []);
+
+  const modeRef = useRef(MODES.find((m) => m.id === "vivid") ?? MODES[1]);
+  const mode = useMemo(() => {
+    const m = MODES.find((m) => m.id === modeId) ?? MODES[1];
+    modeRef.current = m;
+    return m;
+  }, [modeId]);
 
   // ── Load MediaPipe FaceMesh (optional, non-blocking) ────────────────────
   useEffect(() => {
@@ -218,6 +236,8 @@ export default function BreathingVisualizer() {
 
   // ── helper: sample ROI from displayCanvas ──────────────────────────────
   // Reads from the already-drawn displayCanvas to avoid CORS issues on Safari
+  // Store in ref to avoid useEffect restart
+  const sampleROIRef = useRef<((ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {r: number; g: number; b: number} | null) | null>(null);
   const sampleROI = useCallback(
     (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) => {
       const cw = ctx.canvas.width;
@@ -241,8 +261,13 @@ export default function BreathingVisualizer() {
     },
     []
   );
+  useEffect(() => {
+    sampleROIRef.current = sampleROI;
+  }, [sampleROI]);
 
   // ── EVM amplification overlay ────────────────────────────────────────────
+  // Store in ref to avoid useEffect restart
+  const drawBreathAmplificationRef = useRef<((ctx: CanvasRenderingContext2D, breathVal: number, dw: number, dh: number, vw: number, vh: number) => void) | null>(null);
   const drawBreathAmplification = useCallback(
     (
       displayCtx: CanvasRenderingContext2D,
@@ -375,8 +400,13 @@ export default function BreathingVisualizer() {
     },
     [ampLevel, mode, modeId]
   );
+  useEffect(() => {
+    drawBreathAmplificationRef.current = drawBreathAmplification;
+  }, [drawBreathAmplification]);
 
   // ── draw face guide oval ─────────────────────────────────────────────────
+  // Store in ref to avoid useEffect restart
+  const drawFaceGuideRef = useRef<((ctx: CanvasRenderingContext2D, dw: number, dh: number, progress: number) => void) | null>(null);
   const drawFaceGuide = useCallback(
     (ctx: CanvasRenderingContext2D, dw: number, dh: number, progress: number) => {
       const cx = dw / 2;
@@ -453,8 +483,13 @@ export default function BreathingVisualizer() {
     },
     []
   );
+  useEffect(() => {
+    drawFaceGuideRef.current = drawFaceGuide;
+  }, [drawFaceGuide]);
 
   // ── draw waveform ────────────────────────────────────────────────────────
+  // Store in ref to avoid useEffect restart
+  const drawWaveformRef = useRef<((waveData: number[], breathVal: number) => void) | null>(null);
   const drawWaveform = useCallback(
     (waveData: number[], breathVal: number) => {
       const canvas = waveCanvasRef.current;
@@ -500,6 +535,9 @@ export default function BreathingVisualizer() {
     },
     []
   );
+  useEffect(() => {
+    drawWaveformRef.current = drawWaveform;
+  }, [drawWaveform]);
 
   // ── main render loop ─────────────────────────────────────────────────────
   // NOTE: phase is intentionally NOT in the dependency array.
@@ -564,54 +602,54 @@ export default function BreathingVisualizer() {
       // ── ROI sampling from displayCanvas (already drawn, no CORS issues) ──
       const lm = landmarksRef.current;
 
-      // Face ROI: center 55% of frame (forehead + cheeks)
-      // Note: displayCanvas is mirrored, so x coords are already mirrored
-      const faceRoi = sampleROI(dCtx, 0.225, 0.1, 0.55, 0.55);
-      if (faceRoi) processorRef.current.pushFace({ t, ...faceRoi });
+      if (sampleROIRef.current) {
+        // Face ROI: center 55% of frame (forehead + cheeks)
+        const faceRoi = sampleROIRef.current(dCtx, 0.225, 0.1, 0.55, 0.55);
+        if (faceRoi) processorRef.current.pushFace({ t, ...faceRoi });
 
-      // Nose ROI
-      let noseRoi = null;
-      if (lm && lm.length > 400) {
-        const noseTip = lm[1];
-        const noseW = 0.12, noseH = 0.1;
-        // Mirror x: displayCanvas is mirrored, so use noseTip.x directly
-        noseRoi = sampleROI(dCtx,
-          Math.max(0, noseTip.x - noseW / 2),
-          Math.max(0, noseTip.y - noseH * 0.3),
-          noseW, noseH
-        );
-      } else {
-        noseRoi = sampleROI(dCtx, 0.4, 0.42, 0.2, 0.12);
+        // Nose ROI
+        let noseRoi = null;
+        if (lm && lm.length > 400) {
+          const noseTip = lm[1];
+          const noseW = 0.12, noseH = 0.1;
+          noseRoi = sampleROIRef.current(dCtx,
+            Math.max(0, noseTip.x - noseW / 2),
+            Math.max(0, noseTip.y - noseH * 0.3),
+            noseW, noseH
+          );
+        } else {
+          noseRoi = sampleROIRef.current(dCtx, 0.4, 0.42, 0.2, 0.12);
+        }
+        if (noseRoi) processorRef.current.pushNose({ t, ...noseRoi });
+
+        // Mouth ROI
+        let mouthRoi = null;
+        if (lm && lm.length > 400) {
+          const upperLip = lm[UPPER_LIP];
+          const lowerLip = lm[LOWER_LIP];
+          const mouthW = 0.18, mouthH = 0.1;
+          mouthRoi = sampleROIRef.current(dCtx,
+            Math.max(0, upperLip.x - mouthW / 2),
+            Math.max(0, upperLip.y - 0.01),
+            mouthW, mouthH
+          );
+          processorRef.current.pushLandmark({
+            t,
+            upperLipY: upperLip.y,
+            lowerLipY: lowerLip.y,
+            noseTipY: lm[1].y,
+            leftNostrilY: lm[2].y,
+            rightNostrilY: lm[326]?.y ?? lm[2].y,
+          });
+        } else {
+          mouthRoi = sampleROIRef.current(dCtx, 0.38, 0.56, 0.24, 0.1);
+        }
+        if (mouthRoi) processorRef.current.pushMouth({ t, ...mouthRoi });
+
+        // Chest ROI
+        const chestRoi = sampleROIRef.current(dCtx, 0.2, 0.7, 0.6, 0.25);
+        if (chestRoi) processorRef.current.pushChest({ t, ...chestRoi });
       }
-      if (noseRoi) processorRef.current.pushNose({ t, ...noseRoi });
-
-      // Mouth ROI
-      let mouthRoi = null;
-      if (lm && lm.length > 400) {
-        const upperLip = lm[UPPER_LIP];
-        const lowerLip = lm[LOWER_LIP];
-        const mouthW = 0.18, mouthH = 0.1;
-        mouthRoi = sampleROI(dCtx,
-          Math.max(0, upperLip.x - mouthW / 2),
-          Math.max(0, upperLip.y - 0.01),
-          mouthW, mouthH
-        );
-        processorRef.current.pushLandmark({
-          t,
-          upperLipY: upperLip.y,
-          lowerLipY: lowerLip.y,
-          noseTipY: lm[1].y,
-          leftNostrilY: lm[2].y,
-          rightNostrilY: lm[326]?.y ?? lm[2].y,
-        });
-      } else {
-        mouthRoi = sampleROI(dCtx, 0.38, 0.56, 0.24, 0.1);
-      }
-      if (mouthRoi) processorRef.current.pushMouth({ t, ...mouthRoi });
-
-      // Chest ROI
-      const chestRoi = sampleROI(dCtx, 0.2, 0.7, 0.6, 0.25);
-      if (chestRoi) processorRef.current.pushChest({ t, ...chestRoi });
 
       const count = processorRef.current.faceCount;
       setSampleCount(count);
@@ -627,12 +665,14 @@ export default function BreathingVisualizer() {
       const breathVal = smoothBreathRef.current;
 
       // ── EVM amplification overlay ──
-      drawBreathAmplification(dCtx, breathVal, dw, dh, vw, vh);
+      if (drawBreathAmplificationRef.current) {
+        drawBreathAmplificationRef.current(dCtx, breathVal, dw, dh, vw, vh);
+      }
 
       // ── Face guide oval (during calibration) ──
-      if (currentPhase === "calibrating") {
+      if (currentPhase === "calibrating" && drawFaceGuideRef.current) {
         const progress = Math.min(1, count / CALIBRATION_SAMPLES);
-        drawFaceGuide(dCtx, dw, dh, progress);
+        drawFaceGuideRef.current(dCtx, dw, dh, progress);
       }
 
       // ── Analyze ──
@@ -657,7 +697,9 @@ export default function BreathingVisualizer() {
 
       // ── Waveform ──
       const wf = currentResult?.waveform.slice(-WAVEFORM_POINTS) ?? waveformData;
-      drawWaveform(wf, breathVal);
+      if (drawWaveformRef.current) {
+        drawWaveformRef.current(wf, breathVal);
+      }
     };
 
     rafRef.current = requestAnimationFrame(loop);
@@ -665,9 +707,8 @@ export default function BreathingVisualizer() {
       running = false;
       cancelAnimationFrame(rafRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [drawBreathAmplification, drawFaceGuide, drawWaveform, sampleROI]);
-  // NOTE: phase intentionally omitted — use phaseRef.current inside loop
+  }, []);
+  // NOTE: All dependencies are stored in refs to prevent useEffect restart
 
   // ── Breathing mode display helpers ──────────────────────────────────────
   const breathingModeLabel = (mode: string) => {
