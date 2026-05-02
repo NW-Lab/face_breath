@@ -451,13 +451,22 @@ export default function BreathingVisualizer() {
         sampleCanvasRef.current = c;
       }
 
-      // Sync display canvas
+      // Sync display canvas size to CSS rendered size
       const rect = displayCanvas.getBoundingClientRect();
       const targetW = Math.floor(rect.width) || vw;
       const targetH = Math.floor(rect.height) || vh;
       if (displayCanvas.width !== targetW || displayCanvas.height !== targetH) {
         displayCanvas.width = targetW;
         displayCanvas.height = targetH;
+      }
+
+      // Always draw video frame to display canvas first (mirrored)
+      const dCtxEarly = displayCanvas.getContext("2d");
+      if (dCtxEarly) {
+        dCtxEarly.save();
+        dCtxEarly.scale(-1, 1);
+        dCtxEarly.drawImage(video, -targetW, 0, targetW, targetH);
+        dCtxEarly.restore();
       }
 
       const sCtx = sampleCanvasRef.current.getContext("2d", { willReadFrequently: true });
@@ -563,19 +572,13 @@ export default function BreathingVisualizer() {
       smoothBreathRef.current += (rawBreath - smoothBreathRef.current) * 0.12;
       const breathVal = smoothBreathRef.current;
 
-      // ── Draw display canvas ───────────────────────────────────────────
+      // ── Draw EVM amplification overlay on top of already-drawn video ──
       const dCtx = displayCanvas.getContext("2d");
       if (!dCtx) return;
       const dw = displayCanvas.width;
       const dh = displayCanvas.height;
 
-      // Mirror video
-      dCtx.save();
-      dCtx.scale(-1, 1);
-      dCtx.drawImage(video, -dw, 0, dw, dh);
-      dCtx.restore();
-
-      // EVM amplification overlay
+      // EVM amplification overlay (video already drawn above)
       drawBreathAmplification(dCtx, breathVal, dw, dh, vw, vh);
 
       // Waveform
@@ -608,13 +611,14 @@ export default function BreathingVisualizer() {
       {/* Hidden video element */}
       <video
         ref={videoRef}
-        className="absolute inset-0 w-full h-full object-cover opacity-0 pointer-events-none"
+        className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+        style={{ display: phase === "idle" || phase === "error" ? "none" : "block" }}
         playsInline
         muted
         autoPlay
       />
 
-      {/* Display canvas — full screen */}
+      {/* Display canvas — full screen (overlaid on video, shows EVM amplification + HUD overlays) */}
       <canvas
         ref={displayCanvasRef}
         className={`absolute inset-0 w-full h-full object-cover scanlines ${vignetteActive ? "breath-vignette" : ""}`}
