@@ -61,6 +61,11 @@ function peakToPeak(signal: number[]): number {
   return mx - mn;
 }
 
+// Slider constants
+const FFT_WIN_MIN = 100;
+const FFT_WIN_MAX = 600;
+const FFT_WIN_DEFAULT = 300;
+
 // ── Component ──────────────────────────────────────────────────────────────
 export default function BreathingVisualizer() {
   const videoRef   = useRef<HTMLVideoElement>(null);
@@ -78,6 +83,9 @@ export default function BreathingVisualizer() {
   const waveformRef    = useRef<number[]>([]);
   const smoothBreath   = useRef<number>(0);
 
+  // FFT window length (in frames) — controlled by slider, stored in ref
+  const fftWinRef      = useRef<number>(FFT_WIN_DEFAULT);
+
   // Results (stored in ref, written to DOM directly for performance)
   const bpmRef         = useRef<number>(0);
   const depthRef       = useRef<number>(0);
@@ -91,10 +99,12 @@ export default function BreathingVisualizer() {
   const calibBarRef    = useRef<HTMLDivElement>(null);
   const calibTextRef   = useRef<HTMLSpanElement>(null);
   const statusDomRef   = useRef<HTMLDivElement>(null);
+  const sampleCountDomRef = useRef<HTMLSpanElement>(null);
 
   // React state: only for showing/hiding camera UI
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState("");
+  const [fftWinDisplay, setFftWinDisplay] = useState(FFT_WIN_DEFAULT);
 
   // ── Sample ROI from canvas ──────────────────────────────────────────────
   function sampleROI(
@@ -331,11 +341,18 @@ export default function BreathingVisualizer() {
       }
 
       // ── Measuring phase ──
-      // Build breath signal from green channel of face ROI
-      const faceSignal = faceSamples.current.map(s => s.g);
-      const noseSignal = noseSamples.current.map(s => s.g);
-      const mouthSignal = mouthSamples.current.map(s => s.g);
-      const chestSignal = chestSamples.current.map(s => s.g);
+      // Use fftWinRef.current frames for BPM analysis window
+      const winLen = fftWinRef.current;
+      const allFace  = faceSamples.current.map(s => s.g);
+      const allNose  = noseSamples.current.map(s => s.g);
+      const allMouth = mouthSamples.current.map(s => s.g);
+      const allChest = chestSamples.current.map(s => s.g);
+
+      // Slice to FFT window length
+      const faceSignal  = allFace.slice(-winLen);
+      const noseSignal  = allNose.slice(-winLen);
+      const mouthSignal = allMouth.slice(-winLen);
+      const chestSignal = allChest.slice(-winLen);
 
       // Primary breath signal: face green channel
       const breathSignal = faceSignal.length > 0 ? faceSignal : chestSignal;
@@ -344,10 +361,12 @@ export default function BreathingVisualizer() {
       smoothBreath.current += (latest - smoothBreath.current) * 0.15;
       const breathVal = smoothBreath.current;
 
-      // BPM
-      const bpm = estimateBPM(breathSignal, TARGET_FPS);
-      const clampedBpm = bpm < 4 || bpm > 40 ? bpmRef.current : bpm;
-      bpmRef.current = clampedBpm;
+      // BPM (only update when we have enough samples)
+      if (breathSignal.length >= 60) {
+        const bpm = estimateBPM(breathSignal, TARGET_FPS);
+        const clampedBpm = bpm < 4 || bpm > 40 ? bpmRef.current : bpm;
+        bpmRef.current = clampedBpm;
+      }
 
       // Depth (peak-to-peak of filtered signal)
       const depth = peakToPeak(filtered.slice(-60));
@@ -368,9 +387,11 @@ export default function BreathingVisualizer() {
       waveformRef.current = wf.map(v => v / wfMax);
 
       // ── Update DOM directly ──
-      if (bpmDomRef.current)   bpmDomRef.current.textContent   = clampedBpm > 0 ? `${clampedBpm}` : "--";
-      if (depthDomRef.current) depthDomRef.current.textContent = depth > 0 ? `${Math.round(depth * 100) / 100}` : "--";
-      if (modeDomRef.current)  modeDomRef.current.textContent  = modeRef.current;
+      const clampedBpm = bpmRef.current;
+      if (bpmDomRef.current)        bpmDomRef.current.textContent        = clampedBpm > 0 ? `${clampedBpm}` : "--";
+      if (depthDomRef.current)      depthDomRef.current.textContent      = depth > 0 ? `${Math.round(depth * 100) / 100}` : "--";
+      if (modeDomRef.current)       modeDomRef.current.textContent       = modeRef.current;
+      if (sampleCountDomRef.current) sampleCountDomRef.current.textContent = `${breathSignal.length} / ${winLen}`;
 
       // ── EVM overlay ──
       drawBreathOverlay(ctx, breathVal);
@@ -557,10 +578,45 @@ export default function BreathingVisualizer() {
         <canvas ref={waveRef} className="w-full" style={{ height: 80 }} />
       </div>
 
+      {/* FFT Window Slider */}
+      <div className="w-full rounded-xl p-4" style={{ background: "rgba(0,220,255,0.04)", border: "1px solid rgba(0,220,255,0.12)" }}>
+        <div className="flex justify-between items-center mb-3">
+          <span className="text-xs font-mono text-gray-400">FFT ウィンドウ長</span>
+          <span className="text-xs font-mono text-cyan-400">{fftWinDisplay} フレーム ({(fftWinDisplay / TARGET_FPS).toFixed(1)}s)</span>
+        </div>
+        <input
+          type="range"
+          min={FFT_WIN_MIN}
+          max={FFT_WIN_MAX}
+          step={10}
+          defaultValue={FFT_WIN_DEFAULT}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            fftWinRef.current = v;      // update ref immediately (no re-render)
+            setFftWinDisplay(v);        // update display label
+          }}
+          className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
+          style={{
+            background: `linear-gradient(to right, #00dcff ${((fftWinDisplay - FFT_WIN_MIN) / (FFT_WIN_MAX - FFT_WIN_MIN)) * 100}%, rgba(0,220,255,0.15) 0%)`,
+            accentColor: "#00dcff",
+          }}
+        />
+        <div className="flex justify-between mt-1">
+          <span className="text-xs text-gray-600 font-mono">{FFT_WIN_MIN}f ({(FFT_WIN_MIN/TARGET_FPS).toFixed(0)}s)</span>
+          <span className="text-xs text-gray-600 font-mono">{FFT_WIN_MAX}f ({(FFT_WIN_MAX/TARGET_FPS).toFixed(0)}s)</span>
+        </div>
+        {/* Live sample count */}
+        <div className="mt-2 flex items-center gap-2">
+          <span className="text-xs text-gray-600 font-mono">現在のサンプル数:</span>
+          <span ref={sampleCountDomRef} className="text-xs font-mono text-cyan-400">-- / {fftWinDisplay}</span>
+        </div>
+      </div>
+
       {/* Info */}
       <div className="w-full text-xs text-gray-600 font-mono text-center leading-relaxed">
         顔全体が映るよう距離を調整してください。<br/>
-        胸・肩も映ると呼吸の深さ推定精度が向上します。
+        胸・肩も映ると呼吸の深さ推定精度が向上します。<br/>
+        <span className="text-cyan-900">BPM が不安定な場合はウィンドウ長を増やしてください。</span>
       </div>
     </div>
   );
