@@ -6,6 +6,31 @@
 
 ---
 
+## リポジトリ構成
+
+- `Web/`: Web アプリ本体（Vite + React + TypeScript）
+- `iOS/`: iOS アプリ（Swift）用ディレクトリ
+
+> Web 実装はルート直下から `Web/` 配下へ移動済み。
+
+---
+
+## 開発手順（Web）
+
+```bash
+cd Web
+pnpm install
+pnpm dev
+```
+
+よく使うコマンド:
+
+- `pnpm check`: TypeScript 型チェック
+- `pnpm build`: 本番ビルド
+- `pnpm preview`: ビルド成果物のローカル確認
+
+---
+
 ## 機能概要
 
 | 機能 | 説明 | 根拠手法 |
@@ -91,7 +116,7 @@ Wu et al. (2012) の Eulerian Video Magnification と Mattioli et al. (2023) の
 
 - **フロントエンド**: React 19 + TypeScript + Tailwind CSS 4
 - **顔検出**: MediaPipe FaceMesh（CDN 経由）
-- **信号処理**: カスタム DFT / バンドパスフィルタ（`src/lib/breathing.ts`）
+- **信号処理**: カスタム DFT / バンドパスフィルタ（`Web/client/src/lib/breathing.ts`）
 - **映像処理**: Canvas 2D API（EVM 増幅オーバーレイ）
 - **フォント**: Space Grotesk + JetBrains Mono（Bio-Lab Noir テーマ）
 

@@ -1,25 +1,25 @@
 # Dependencies
-**/node_modules
-.pnpm-store/
+Web/**/node_modules
+Web/.pnpm-store/
 
 # Build outputs
-dist/
-build/
-*.dist
+Web/dist/
+Web/build/
+Web/*.dist
 
 # Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
+Web/.env
+Web/.env.local
+Web/.env.development.local
+Web/.env.test.local
+Web/.env.production.local
 
 # IDE and editor files
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
+Web/.vscode/
+Web/.idea/
+Web/*.swp
+Web/*.swo
+Web/*~
 
 # OS generated files
 .DS_Store
@@ -31,38 +31,38 @@ ehthumbs.db
 Thumbs.db
 
 # Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+Web/logs
+Web/*.log
+Web/npm-debug.log*
+Web/yarn-debug.log*
+Web/yarn-error.log*
+Web/pnpm-debug.log*
+Web/lerna-debug.log*
 
 # Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
+Web/pids
+Web/*.pid
+Web/*.seed
+Web/*.pid.lock
 
 # Coverage directory used by tools like istanbul
-coverage/
-*.lcov
+Web/coverage/
+Web/*.lcov
 
 # nyc test coverage
-.nyc_output
+Web/.nyc_output
 
 # Dependency directories
-jspm_packages/
+Web/jspm_packages/
 
 # TypeScript cache
-*.tsbuildinfo
+Web/*.tsbuildinfo
 
 # Optional npm cache directory
-.npm
+Web/.npm
 
 # Optional eslint cache
-.eslintcache
+Web/.eslintcache
 
 # Microbundle cache
 .rpt2_cache/
@@ -71,7 +71,7 @@ jspm_packages/
 .rts2_cache_umd/
 
 # Optional REPL history
-.node_repl_history
+Web/.node_repl_history
 
 # Output of 'npm pack'
 *.tgz
@@ -97,8 +97,8 @@ jspm_packages/
 .storybook-out
 
 # Temporary folders
-tmp/
-temp/
+Web/tmp/
+Web/temp/
 
 # Database
 *.db
