@@ -10,8 +10,11 @@
 
 - `Web/`: Web アプリ本体（Vite + React + TypeScript）
 - `iOS/`: iOS アプリ（Swift）用ディレクトリ
+- `Win/`: Windows アプリ（.NET 10 + WinUI 3）
 
 > Web 実装はルート直下から `Web/` 配下へ移動済み。
+
+> Windows 版のセットアップ・インストール手順は `Win/README.md` を参照してください。
 
 ---
 

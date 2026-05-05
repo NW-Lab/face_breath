@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="FaceBreathWin.MainPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    Background="#060B14"
+    mc:Ignorable="d">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Width="940" HorizontalAlignment="Center" Spacing="10" Padding="16">
+            <TextBlock Text="Face Breath for WinUI 3" Foreground="#FFE5F8FF" FontSize="30" FontWeight="Bold" HorizontalAlignment="Center" />
+            <TextBlock Text="Web版ロジック移植: 呼吸数・呼吸深さ・鼻/口モード推定" Foreground="#FF89A8B2" HorizontalAlignment="Center" />
+
+            <Border Height="520" BorderBrush="#4D00DCFF" BorderThickness="1" CornerRadius="8" Background="#FF0A0F1A">
+                <Grid>
+                    <Grid x:Name="CameraPreview" Background="#FF051220">
+                        <TextBlock
+                            Text="カメラ映像解析中"
+                            Foreground="#FF89A8B2"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center" />
+                    </Grid>
+
+                    <Grid x:Name="IdleOverlay" Background="#CC050A14" Visibility="Visible">
+                        <TextBlock Text="計測停止中" Foreground="#FFE5F8FF" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+
+                    <Border x:Name="CalibrationPanel" VerticalAlignment="Bottom" Margin="10" Padding="8" CornerRadius="8" Background="#66001425" Visibility="Collapsed">
+                        <StackPanel>
+                            <Grid>
+                                <TextBlock x:Name="CalibrationText" Text="キャリブレーション 0%" Foreground="#FF00DCFF" FontFamily="Consolas" />
+                                <TextBlock x:Name="StatusText" Text="キャリブレーション中" Foreground="#FF89A8B2" FontFamily="Consolas" HorizontalAlignment="Right" />
+                            </Grid>
+                            <ProgressBar x:Name="CalibrationProgress" Minimum="0" Maximum="100" Value="0" />
+                        </StackPanel>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border x:Name="ErrorPanel" BorderBrush="#66FF5050" BorderThickness="1" Background="#22FF5050" Padding="10" Visibility="Collapsed">
+                <TextBlock x:Name="ErrorText" Foreground="#FFFF6060" TextWrapping="Wrap" />
+            </Border>
+
+            <Button x:Name="StartStopButton" Content="開始" Click="StartStopButton_OnClick" Height="44" />
+
+            <Grid ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Background="#1A102034" BorderBrush="#4D00DCFF" BorderThickness="1" Padding="8">
+                    <StackPanel>
+                        <TextBlock Text="呼吸数" Foreground="#FF89A8B2" FontFamily="Consolas" HorizontalAlignment="Center" />
+                        <TextBlock x:Name="BpmText" Text="--" Foreground="#FF00DCFF" FontFamily="Consolas" FontSize="30" FontWeight="Bold" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Background="#1A102034" BorderBrush="#4D00DCFF" BorderThickness="1" Padding="8">
+                    <StackPanel>
+                        <TextBlock Text="呼吸モード" Foreground="#FF89A8B2" FontFamily="Consolas" HorizontalAlignment="Center" />
+                        <TextBlock x:Name="ModeText" Text="--" Foreground="#FF9DFDE1" FontFamily="Consolas" FontSize="24" FontWeight="Bold" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="2" Background="#1A102034" BorderBrush="#4D00DCFF" BorderThickness="1" Padding="8">
+                    <StackPanel>
+                        <TextBlock Text="呼吸深さ" Foreground="#FF89A8B2" FontFamily="Consolas" HorizontalAlignment="Center" />
+                        <TextBlock x:Name="DepthText" Text="--" Foreground="#FF00DCFF" FontFamily="Consolas" FontSize="30" FontWeight="Bold" HorizontalAlignment="Center" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Background="#CC000A14" BorderBrush="#4D00DCFF" BorderThickness="1" Padding="8">
+                <StackPanel>
+                    <TextBlock Text="BREATH WAVEFORM" Foreground="#FF89A8B2" FontFamily="Consolas" FontSize="11" />
+                    <Canvas x:Name="WaveCanvas" Height="90" Background="#1400DCFF">
+                        <Polyline x:Name="WavePolyline" Stroke="#FF00DCFF" StrokeThickness="2" />
+                    </Canvas>
+                </StackPanel>
+            </Border>
+
+            <Border Background="#1A102034" BorderBrush="#4D00DCFF" BorderThickness="1" Padding="10">
+                <StackPanel Spacing="6">
+                    <TextBlock Text="FFT WINDOW LENGTH" Foreground="#FF7ECFCF" FontFamily="Consolas" />
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0" Content="-" Click="DecreaseFftButton_OnClick" />
+                        <StackPanel Grid.Column="1" HorizontalAlignment="Center">
+                            <TextBlock x:Name="FftWindowText" Text="300" Foreground="#FF00FFB4" FontFamily="Consolas" FontSize="28" FontWeight="Bold" HorizontalAlignment="Center" />
+                            <TextBlock x:Name="FftWindowSecondsText" Text="frames / 10.0 s" Foreground="#FF7ECFCF" FontFamily="Consolas" HorizontalAlignment="Center" />
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="+" Click="IncreaseFftButton_OnClick" />
+                    </Grid>
+                    <TextBlock x:Name="SampleCountText" Text="-- / 300" Foreground="#FF00DCFF" FontFamily="Consolas" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

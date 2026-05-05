@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "FaceBreathWin (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "FaceBreathWin (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
