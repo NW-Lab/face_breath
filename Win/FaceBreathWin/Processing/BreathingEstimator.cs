@@ -76,7 +76,11 @@ public sealed class BreathingEstimator
         var bpmConfidence = EstimateBpmConfidence(bpm, _lastStableBpm, signalConfidence);
         var modeConfidence = EstimateModeConfidence(noseAmp, mouthAmp, signalConfidence);
 
-        var wave = Normalize(filtered.TakeLast(_waveformLen).ToArray());
+        var waveformSourceLen = Math.Max(_waveformLen, _targetFps * 6);
+        var waveformSource = breathSignal.TakeLast(waveformSourceLen).ToArray();
+        var waveformFiltered = BandpassBreath(waveformSource, _targetFps, 4.0, 1.0);
+        var waveformTrimmed = TrimFilterStartup(waveformFiltered, _targetFps);
+        var wave = Normalize(waveformTrimmed.TakeLast(_waveformLen).ToArray());
 
         return new BreathingResult(
             _lastStableBpm,
@@ -100,7 +104,7 @@ public sealed class BreathingEstimator
         }
     }
 
-    private static List<double> BandpassBreath(IReadOnlyList<double> signal, int fps)
+    private static List<double> BandpassBreath(IReadOnlyList<double> signal, int fps, double slowWindowSec = 10.0, double fastWindowSec = 2.0)
     {
         if (signal.Count < 10)
         {
@@ -108,8 +112,11 @@ public sealed class BreathingEstimator
         }
 
         var output = new double[signal.Count];
-        var slowWindow = Math.Max(1, Math.Min(signal.Count, (int)Math.Round(fps / 0.1)));
-        var fastWindow = Math.Max(1, Math.Min(signal.Count, (int)Math.Round(fps / 0.5)));
+        var requestedSlowWindow = Math.Max(1, (int)Math.Round(fps * slowWindowSec));
+        var requestedFastWindow = Math.Max(1, (int)Math.Round(fps * fastWindowSec));
+        var maxSlowWindow = Math.Max(8, signal.Count / 2);
+        var slowWindow = Math.Max(6, Math.Min(maxSlowWindow, requestedSlowWindow));
+        var fastWindow = Math.Max(3, Math.Min(slowWindow - 2, requestedFastWindow));
 
         for (var i = 0; i < signal.Count; i++)
         {
@@ -134,6 +141,18 @@ public sealed class BreathingEstimator
         }
 
         return output.ToList();
+    }
+
+    private static IReadOnlyList<double> TrimFilterStartup(IReadOnlyList<double> filtered, int fps)
+    {
+        if (filtered.Count <= 20)
+        {
+            return filtered;
+        }
+
+        var trimCount = Math.Min(filtered.Count / 3, Math.Max(8, fps / 2));
+        var trimmed = filtered.Skip(trimCount).ToArray();
+        return trimmed.Length > 0 ? trimmed : filtered;
     }
 
     private static int EstimateBpm(IReadOnlyList<double> signal, int fps)
