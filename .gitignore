@@ -21,6 +21,10 @@ Web/*.swp
 Web/*.swo
 Web/*~
 
+# Visual Studio workspace files
+.vs/
+Win/.vs/
+
 # OS generated files
 .DS_Store
 .DS_Store?

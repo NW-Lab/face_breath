@@ -12,6 +12,7 @@ public sealed class BreathingEstimator
     private readonly List<SignalSample> _chestSamples = [];
 
     private int _lastStableBpm;
+    private string _lastMode = "--";
 
     public BreathingEstimator(int windowMs, int targetFps, int waveformLen)
     {
@@ -27,6 +28,7 @@ public sealed class BreathingEstimator
         _mouthSamples.Clear();
         _chestSamples.Clear();
         _lastStableBpm = 0;
+        _lastMode = "--";
     }
 
     public void Push(long tMs, double faceG, double noseG, double mouthG, double chestG)
@@ -64,15 +66,15 @@ public sealed class BreathingEstimator
         }
 
         var depth = PeakToPeak(filtered.TakeLast(60));
-        var noseAmp = PeakToPeak(BandpassBreath(noseSignal, _targetFps).TakeLast(60));
-        var mouthAmp = PeakToPeak(BandpassBreath(mouthSignal, _targetFps).TakeLast(60));
-        var mode = "--";
-
-        if (noseAmp > 0 || mouthAmp > 0)
-        {
-            var ratio = noseAmp / (noseAmp + mouthAmp + 0.001);
-            mode = ratio > 0.55 ? "鼻呼吸" : ratio < 0.35 ? "口呼吸" : "混合";
-        }
+        var modeWindow = Math.Max(18, Math.Min(45, _targetFps));
+        var noseAmp = PeakToPeak(BandpassBreath(noseSignal, _targetFps).TakeLast(modeWindow));
+        var mouthAmp = PeakToPeak(BandpassBreath(mouthSignal, _targetFps).TakeLast(modeWindow));
+        var mode = ResolveMode(noseAmp, mouthAmp, _lastMode);
+        _lastMode = mode;
+        var snrDb = EstimateSnrDb(filtered.TakeLast(Math.Max(60, _targetFps * 2)).ToArray());
+        var signalConfidence = EstimateSignalConfidence(snrDb, breathSignal.Count);
+        var bpmConfidence = EstimateBpmConfidence(bpm, _lastStableBpm, signalConfidence);
+        var modeConfidence = EstimateModeConfidence(noseAmp, mouthAmp, signalConfidence);
 
         var wave = Normalize(filtered.TakeLast(_waveformLen).ToArray());
 
@@ -81,7 +83,11 @@ public sealed class BreathingEstimator
             depth,
             mode,
             breathSignal.Count,
-            wave);
+            wave,
+            snrDb,
+            signalConfidence,
+            bpmConfidence,
+            modeConfidence);
     }
 
     private void PushTo(List<SignalSample> list, long tMs, double value)
@@ -167,6 +173,80 @@ public sealed class BreathingEstimator
         return array.Max() - array.Min();
     }
 
+    private static string ResolveMode(double noseAmp, double mouthAmp, string previousMode)
+    {
+        var totalAmp = noseAmp + mouthAmp;
+        if (totalAmp <= 0.01)
+        {
+            return previousMode;
+        }
+
+        var ratio = noseAmp / (totalAmp + 0.001);
+        if (previousMode == "鼻呼吸" && ratio > 0.50)
+        {
+            return "鼻呼吸";
+        }
+
+        if (previousMode == "口呼吸" && ratio < 0.50)
+        {
+            return "口呼吸";
+        }
+
+        return ratio > 0.58 ? "鼻呼吸" : ratio < 0.42 ? "口呼吸" : "混合";
+    }
+
+    private static double EstimateSnrDb(IReadOnlyList<double> signal)
+    {
+        if (signal.Count < 8)
+        {
+            return -30;
+        }
+
+        var mean = signal.Average();
+        var centered = signal.Select(v => v - mean).ToArray();
+        var signalPower = centered.Select(v => v * v).Average();
+
+        var diffSqSum = 0.0;
+        for (var i = 1; i < centered.Length; i++)
+        {
+            var d = centered[i] - centered[i - 1];
+            diffSqSum += d * d;
+        }
+
+        var noisePower = Math.Max(1e-9, diffSqSum / Math.Max(1, centered.Length - 1));
+        var snr = 10.0 * Math.Log10((signalPower + 1e-9) / noisePower);
+        return Math.Clamp(snr, -30, 40);
+    }
+
+    private static double EstimateSignalConfidence(double snrDb, int sampleCount)
+    {
+        var snrFactor = Math.Clamp((snrDb + 8.0) / 18.0, 0.0, 1.0);
+        var sampleFactor = Math.Clamp(sampleCount / 120.0, 0.0, 1.0);
+
+        var confidence = (0.75 * snrFactor) + (0.25 * sampleFactor);
+        return Math.Clamp(confidence, 0.0, 1.0);
+    }
+
+    private static double EstimateBpmConfidence(int bpm, int stableBpm, double signalConfidence)
+    {
+        var bpmRangeFactor = bpm is >= 4 and <= 40 ? 1.0 : 0.25;
+        var stableFactor = stableBpm > 0
+            ? Math.Clamp(1.0 - (Math.Abs(bpm - stableBpm) / 20.0), 0.0, 1.0)
+            : 0.5;
+
+        var confidence = (0.40 * signalConfidence) + (0.40 * bpmRangeFactor) + (0.20 * stableFactor);
+        return Math.Clamp(confidence, 0.0, 1.0);
+    }
+
+    private static double EstimateModeConfidence(double noseAmp, double mouthAmp, double signalConfidence)
+    {
+        var separation = Math.Clamp(Math.Abs(noseAmp - mouthAmp) / (noseAmp + mouthAmp + 0.001), 0.0, 1.0);
+        var amplitudeFactor = Math.Clamp((noseAmp + mouthAmp) / 2.0, 0.0, 1.0);
+
+        var confidence = (0.50 * separation) + (0.30 * signalConfidence) + (0.20 * amplitudeFactor);
+        return Math.Clamp(confidence, 0.0, 1.0);
+    }
+
     private static IReadOnlyList<double> Normalize(IReadOnlyList<double> wave)
     {
         if (wave.Count == 0)
@@ -186,4 +266,13 @@ public sealed class BreathingEstimator
     private readonly record struct SignalSample(long TimestampMs, double Value);
 }
 
-public sealed record BreathingResult(int Bpm, double Depth, string Mode, int SampleCount, IReadOnlyList<double> Waveform);
+public sealed record BreathingResult(
+    int Bpm,
+    double Depth,
+    string Mode,
+    int SampleCount,
+    IReadOnlyList<double> Waveform,
+    double SnrDb,
+    double SignalConfidence,
+    double BpmConfidence,
+    double ModeConfidence);
